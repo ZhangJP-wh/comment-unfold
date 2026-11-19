@@ -1,0 +1,17 @@
+# OS and editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# Chrome packaging output and private keys
+*.pem
+*.crx
+*.zip
+
+# Dependencies and logs
+node_modules/
+*.log

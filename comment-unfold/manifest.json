@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "评论全开",
+  "short_name": "评论全开",
+  "version": "1.0.0",
+  "description": "一键展开 YouTube、哔哩哔哩和小红书当前页面的评论与回复。只在本地操作页面，不上传评论内容。",
+  "action": {
+    "default_title": "展开当前页评论",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/service-worker.js"
+  },
+  "permissions": ["activeTab", "scripting"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://www.bilibili.com/*",
+        "https://bilibili.com/*",
+        "https://www.xiaohongshu.com/*",
+        "https://xiaohongshu.com/*",
+        "https://www.rednote.com/*"
+      ],
+      "js": ["src/page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://www.bilibili.com/*",
+        "https://bilibili.com/*",
+        "https://www.xiaohongshu.com/*",
+        "https://xiaohongshu.com/*",
+        "https://www.rednote.com/*"
+      ],
+      "js": [
+        "src/shared.js",
+        "src/pager.js",
+        "src/adapters.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
