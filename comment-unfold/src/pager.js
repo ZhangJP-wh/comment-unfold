@@ -2,16 +2,14 @@
   const CU = globalThis.CU;
 
   const HINT_IDLE = "点击此区域后，可用左右方向键翻页";
-  const HINT_ON = "已激活，用 ← 和 → 翻页";
-  const HINT_QUIET = "← 上一页 · → 下一页";
 
   const pager = {
     regions: [],
     active: null,
     activated: false,
     hovering: false,
+    point: null,
     hint: null,
-    fadeTimer: 0,
     lastKeyAt: 0,
     bound: false,
   };
@@ -20,31 +18,38 @@
     return document.getElementById("cu-host")?.shadowRoot?.querySelector(".cu-hint") || null;
   }
 
-  function placeHint(root) {
+  const HINT_GAP_X = 12;
+  const HINT_MARGIN = 8;
+
+  function placeHint(point) {
     const hint = hintEl();
-    if (!hint || !root?.getBoundingClientRect) return;
-    const rect = root.getBoundingClientRect();
-    const left = Math.max(12, Math.min(rect.left, window.innerWidth - 24));
-    const right = Math.max(left + 24, Math.min(rect.right, window.innerWidth - 12));
-    const top = Math.max(12, Math.min(rect.top + 10, window.innerHeight - 56));
-    hint.style.top = `${top}px`;
-    hint.style.left = `${(left + right) / 2}px`;
+    if (!hint || !point) return;
+    const width = hint.offsetWidth;
+    const height = hint.offsetHeight;
+    let left = point.x + HINT_GAP_X;
+    let top = point.y - height / 2;
+    const maxLeft = window.innerWidth - HINT_MARGIN - width;
+    const maxTop = window.innerHeight - HINT_MARGIN - height;
+    if (left > maxLeft) left = maxLeft;
+    if (left < HINT_MARGIN) left = HINT_MARGIN;
+    if (top > maxTop) top = maxTop;
+    if (top < HINT_MARGIN) top = HINT_MARGIN;
+    hint.style.left = `${Math.round(left)}px`;
+    hint.style.top = `${Math.round(top)}px`;
   }
 
-  function showHint(text, root) {
+  function showHint(text, point) {
     const hint = hintEl();
     if (!hint) return;
     hint.textContent = text;
     hint.dataset.show = "1";
-    hint.dataset.fade = "0";
-    placeHint(root);
+    placeHint(point);
   }
 
   function hideHint() {
     const hint = hintEl();
     if (!hint) return;
     hint.dataset.show = "0";
-    hint.dataset.fade = "0";
   }
 
   function isOurUi(event) {
@@ -66,14 +71,6 @@
     return best;
   }
 
-  function fadeHint(delay) {
-    window.clearTimeout(pager.fadeTimer);
-    pager.fadeTimer = window.setTimeout(() => {
-      const hint = hintEl();
-      if (hint && pager.activated) hint.dataset.fade = "1";
-    }, delay);
-  }
-
   function onMove(event) {
     if (!pager.regions.length || isOurUi(event)) return;
     const region = pickRegion(event);
@@ -82,15 +79,13 @@
       hideHint();
       return;
     }
-    if (!pager.activated) {
-      showHint(HINT_IDLE, region.root);
+    pager.point = { x: event.clientX, y: event.clientY };
+    pager.hovering = true;
+    if (pager.activated) {
+      hideHint();
       return;
     }
-    if (!pager.hovering) {
-      pager.hovering = true;
-      showHint(HINT_QUIET, region.root);
-      fadeHint(900);
-    }
+    showHint(HINT_IDLE, pager.point);
   }
 
   function onClick(event) {
@@ -106,8 +101,8 @@
     pager.activated = true;
     pager.hovering = true;
     pager.active = region;
-    showHint(HINT_ON, region.root);
-    fadeHint(1600);
+    pager.point = { x: event.clientX, y: event.clientY };
+    hideHint();
   }
 
   function onKey(event) {
@@ -115,8 +110,8 @@
     if (event.key === "Escape") {
       pager.activated = false;
       pager.active = null;
-      pager.hovering = false;
-      hideHint();
+      if (pager.hovering && pager.point) showHint(HINT_IDLE, pager.point);
+      else hideHint();
       return;
     }
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;

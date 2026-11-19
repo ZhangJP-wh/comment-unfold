@@ -32,7 +32,7 @@
       position: fixed;
       z-index: 2147483645;
       max-width: min(420px, calc(100vw - 24px));
-      transform: translateX(-50%);
+      box-sizing: border-box;
       padding: 8px 12px;
       border-radius: 10px;
       background: rgba(20, 24, 28, 0.55);
@@ -46,7 +46,6 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
     }
     .cu-hint[data-show="1"] { opacity: 1; }
-    .cu-hint[data-fade="1"] { opacity: 0; }
     @media (max-width: 640px) {
       .cu-btn { right: 12px; bottom: 12px; font-size: 13px; padding: 8px 12px; }
     }
