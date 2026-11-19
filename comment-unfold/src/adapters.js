@@ -143,6 +143,11 @@ function pagersIn(region) {
       if (named) return named;
       return document.querySelector("ytd-comments");
     },
+    bodyNodes(region) {
+      return CU.deepQueryAll(region, "#content-text").filter(
+        (el) => !el.closest("#author-text, #published-time-text, ytd-comment-engagement-bar, #toolbar")
+      );
+    },
     count(region) {
       return (
         region.querySelectorAll("ytd-comment-thread-renderer").length * 1000 +
@@ -241,6 +246,20 @@ function pagersIn(region) {
     getRegion(options) {
       return findBiliHost(!!options?.deep);
     },
+    bodyNodes(region) {
+      const rich = CU.deepQueryAll(region, "bili-rich-text");
+      const found = [];
+      for (const host of rich) {
+        const inner = host.shadowRoot?.querySelector(".reply-content, #content, .content, p");
+        const box = inner && inner.getBoundingClientRect().height > 1 ? inner : host;
+        if (box.closest?.(".bottom, .bottom-bar, bili-comment-action-buttons")) continue;
+        found.push(box);
+      }
+      if (found.length) return found;
+      return CU.deepQueryAll(region, ".reply-content").filter(
+        (el) => !el.closest(".user-name, .user-info, .reply-info, .info, .like, .reply-btn")
+      );
+    },
     count(region) {
       const threads = CU.deepQueryAll(region, "bili-comment-thread-renderer, .reply-item").length;
       const replies = CU.deepQueryAll(region, "bili-comment-reply-renderer, .sub-reply-item").length;
@@ -277,6 +296,10 @@ function pagersIn(region) {
     }
   }
 
+  function containsNoteMedia(el) {
+    return !!el.querySelector(".media-container, .note-content, .slider-container, .swiper-container");
+  }
+
   function xhsRegion() {
     const selectors = [
       ".comments-container",
@@ -286,11 +309,17 @@ function pagersIn(region) {
     ];
     const found = [];
     for (const selector of selectors) {
-      document.querySelectorAll(selector).forEach((el) => found.push(el));
+      document.querySelectorAll(selector).forEach((el) => {
+        if (!containsNoteMedia(el)) found.push(el);
+      });
     }
     if (!found.length) return null;
     found.sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
     return found[0];
+  }
+
+  function xhsIsMeta(el) {
+    return !!el.closest(".author, .author-wrapper, .name, .date, .labels, .like-wrapper, .interactions");
   }
 
   const xiaohongshu = {
@@ -307,6 +336,27 @@ function pagersIn(region) {
     isDetail: xhsDetail,
     getRegion() {
       return xhsRegion();
+    },
+    bodyNodes(region) {
+      const texts = CU.deepQueryAll(region, ".note-text, .comment-content");
+      const contents = CU.deepQueryAll(
+        region,
+        ".comment-item .content, .comment-item-sub .content, .parent-comment .content"
+      );
+      const picked = [];
+      const covered = new Set();
+      for (const el of texts) {
+        if (xhsIsMeta(el)) continue;
+        picked.push(el);
+        const box = el.closest(".content");
+        if (box) covered.add(box);
+      }
+      for (const el of contents) {
+        if (covered.has(el) || xhsIsMeta(el)) continue;
+        if (el.querySelector(".note-text, .comment-content, .author, .avatar, .name, .date")) continue;
+        picked.push(el);
+      }
+      return picked;
     },
     count(region) {
       const parents = region.querySelectorAll(".parent-comment").length;
