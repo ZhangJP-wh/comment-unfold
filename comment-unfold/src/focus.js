@@ -18,14 +18,8 @@
     dirtyShadows: false,
   };
 
-  function offButton() {
-    return document.getElementById("cu-host")?.shadowRoot?.querySelector("#cu-focus-off") || null;
-  }
-
   function paintControls() {
-    const button = offButton();
-    if (!button) return;
-    button.hidden = !state.on;
+    /* 页面按钮的文案和显隐由三态切换统一维护。 */
   }
 
   function ensureShade() {

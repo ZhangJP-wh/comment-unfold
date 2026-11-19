@@ -75,13 +75,35 @@
     capped: "限",
     missing: "无",
     stopped: "停",
+    plain: "开",
     idle: "",
   };
+
+  const THREAD_SELECTOR = [
+    "ytd-comment-thread-renderer",
+    "ytd-comment-view-model",
+    "ytd-comment-renderer",
+    "ytd-expander",
+    "bili-comment-thread-renderer",
+    "bili-comment-reply-renderer",
+    ".reply-item",
+    ".sub-reply-item",
+    ".parent-comment",
+    ".comment-item",
+    ".comment-item-sub",
+  ].join(", ");
 
   const ui = {
     host: null,
     button: null,
     runId: 0,
+    restoreId: 0,
+    phase: "off",
+    managedFocus: false,
+    restoring: false,
+    snapshotted: false,
+    preexpanded: new Set(),
+    opened: new Set(),
     attempts: new WeakMap(),
   };
 
@@ -101,6 +123,7 @@
     ui.button.textContent = message || "展开评论";
     ui.button.title = message || "展开当前页评论";
     sendBadge(state);
+    paintCycle();
   }
 
   function ensureUi() {
@@ -121,9 +144,9 @@
     const off = document.createElement("button");
     off.type = "button";
     off.className = "cu-off";
-    off.id = "cu-focus-off";
-    off.textContent = "取消变暗";
-    off.title = "去掉评论区的灰色遮罩，不刷新页面";
+    off.id = "cu-cycle";
+    off.textContent = "关闭高亮";
+    off.title = "只去掉评论区变暗，已展开的回复保留";
     off.hidden = true;
     const hint = document.createElement("div");
     hint.className = "cu-hint";
@@ -134,16 +157,18 @@
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (ui.host.dataset.state === "running") {
-        stopRun();
+      if (ui.phase === "off") {
+        CU.cycle();
         return;
       }
+      if (ui.host.dataset.state === "running" || ui.restoring) return;
       CU.expandCurrent();
     });
     off.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      CU.focus?.disable();
+      if (ui.phase === "off") return;
+      CU.cycle();
     });
     ui.host = host;
     ui.button = button;
@@ -156,18 +181,52 @@
     ui.button = null;
   }
 
+  function paintCycle() {
+    if (ui.host) ui.host.dataset.phase = ui.phase;
+    const next = ui.host?.shadowRoot?.querySelector("#cu-cycle");
+    if (!next) return;
+    if (ui.phase === "focus") {
+      next.hidden = false;
+      next.textContent = "关闭高亮";
+      next.title = "只去掉评论区变暗，已展开的回复保留";
+    } else if (ui.phase === "plain") {
+      next.hidden = false;
+      next.textContent = "恢复收起";
+      next.title = "收起这次展开的回复，并关掉翻页。打开扩展之前就已经展开的不会动";
+      if (ui.host.dataset.state !== "running") sendBadge("plain");
+    } else {
+      next.hidden = true;
+    }
+  }
+
   function refreshChrome() {
     const adapter = CU.currentAdapter();
     const show = CU.shouldShowButton(adapter);
     if (!show) {
-      CU.focus?.disable();
+      if (ui.phase !== "off") shutdown({ restore: false });
       if (ui.host?.dataset.state !== "running") removeUi();
       CU.pager.clear();
       return;
     }
     ensureUi();
-    if (CU.focus?.isOn()) CU.focus.sync();
-    if (ui.host.dataset.state === "running") return;
+    paintCycle();
+    if (ui.phase === "off") {
+      if (!ui.restoring) {
+        if (ui.managedFocus) {
+          CU.focus?.disable();
+          ui.managedFocus = false;
+        }
+        CU.pager.clear();
+        if (ui.host.dataset.state !== "running") setState("idle", "展开评论");
+      }
+      return;
+    }
+    if (ui.phase === "focus") {
+      ui.managedFocus = true;
+      if (!CU.focus?.isOn()) CU.focus?.enable();
+      else CU.focus.sync();
+    }
+    if (ui.host.dataset.state === "running" || ui.restoring) return;
     if (!ui.host.dataset.state || ui.host.dataset.state === "idle") setState("idle", "展开评论");
     const region = adapter.getRegion({ deep: true });
     const pagers = region ? adapter.pagers(region) : [];
@@ -177,10 +236,173 @@
     }
   }
 
-  function stopRun() {
-    ui.runId += 1;
-    setState("stopped", "已停止");
+  function isCollapseControl(el) {
+    if (!el || CU.disabled(el) || CU.layoutHidden(el)) return false;
+    if (el.tagName === "A") {
+      const href = el.getAttribute("href") || "";
+      if (href && !href.startsWith("#") && !href.startsWith("javascript:")) return false;
+    }
+    if (el.id === "less") return true;
+    const text = CU.controlText(el);
+    if (!text || text.length > 24) return false;
+    return /^(收起|收起回复|收起评论|隐藏回复|隐藏更多|隐藏更多回复)$/.test(text) || /^(hide replies|hide reply|show less)$/i.test(text);
   }
+
+  function owningThreads(el) {
+    const found = [];
+    let node = el;
+    while (node && node !== document) {
+      if (node.matches?.(THREAD_SELECTOR)) found.push(node);
+      if (node.parentElement) {
+        node = node.parentElement;
+        continue;
+      }
+      const root = node.getRootNode?.();
+      node = root instanceof ShadowRoot ? root.host : null;
+    }
+    return found;
+  }
+
+  function findCollapse(thread) {
+    const nodes = CU.deepQueryAll(thread, "button, a, [role='button'], bili-text-button, #less, .show-less");
+    for (const el of nodes) {
+      if (!isCollapseControl(el)) continue;
+      const owner = owningThreads(el)[0];
+      if (owner && owner !== thread) continue;
+      return el;
+    }
+    return null;
+  }
+
+  function snapshotPreexpanded(region) {
+    const set = new Set();
+    if (!region) return set;
+    for (const thread of CU.deepQueryAll(region, THREAD_SELECTOR)) {
+      if (findCollapse(thread)) set.add(thread);
+    }
+    for (const expander of CU.deepQueryAll(region, "ytd-expander")) {
+      if (expander.hasAttribute("expanded") && !expander.hasAttribute("collapsed")) set.add(expander);
+    }
+    return set;
+  }
+
+  function ensureSnapshot(region) {
+    if (ui.snapshotted || !region) return;
+    ui.snapshotted = true;
+    ui.preexpanded = snapshotPreexpanded(region);
+  }
+
+  function allowClick(el) {
+    return !owningThreads(el).some((thread) => ui.preexpanded.has(thread));
+  }
+
+  function noteExpand(el) {
+    const expander = CU.closestHost(el, "ytd-expander");
+    const target = expander && (el.id === "more" || el.closest?.("#more")) ? expander : owningThreads(el)[0] || el;
+    if (!target || ui.preexpanded.has(target)) return;
+    ui.opened.add(target);
+  }
+
+  function depth(node) {
+    let count = 0;
+    let current = node;
+    while (current && current !== document) {
+      count += 1;
+      current = current.parentElement || (current.getRootNode?.() instanceof ShadowRoot ? current.getRootNode().host : null);
+    }
+    return count;
+  }
+
+  async function restoreOpened(threads, token) {
+    const ordered = [...threads].sort((a, b) => depth(b) - depth(a));
+    let restored = 0;
+    let missed = 0;
+    for (const thread of ordered) {
+      if (token !== ui.restoreId || ui.phase !== "off") return { aborted: true, restored, missed };
+      if (!thread?.isConnected || ui.preexpanded.has(thread)) continue;
+      const button = findCollapse(thread);
+      if (!button) {
+        missed += 1;
+        continue;
+      }
+      try {
+        CU.clickControl(button);
+        restored += 1;
+      } catch {
+        missed += 1;
+      }
+      await CU.sleep(CU.LIMITS.clickGapMs);
+      if (restored >= 40) break;
+    }
+    return { aborted: false, restored, missed };
+  }
+
+  function shutdown({ restore }) {
+    const threads = [...ui.opened];
+    ui.phase = "off";
+    ui.runId += 1;
+    ui.restoreId += 1;
+    ui.opened = new Set();
+    ui.snapshotted = false;
+    ui.managedFocus = false;
+    const token = ui.restoreId;
+    CU.focus?.disable();
+    CU.pager.clear();
+    paintCycle();
+    if (!restore || !threads.length) {
+      ui.restoring = false;
+      ui.preexpanded = new Set();
+      setState("idle", "展开评论");
+      return { phase: ui.phase };
+    }
+    ui.restoring = true;
+    setState("idle", "正在收起…");
+    restoreOpened(threads, token).then(() => {
+      if (token !== ui.restoreId) return;
+      ui.restoring = false;
+      ui.preexpanded = new Set();
+      if (ui.phase !== "off") return;
+      setState("idle", "展开评论");
+      paintCycle();
+    });
+    return { phase: ui.phase };
+  }
+
+  CU.cycle = function cycle() {
+    if (ui.phase === "off") {
+      ui.phase = "focus";
+      ui.restoreId += 1;
+      ui.restoring = false;
+      ui.managedFocus = true;
+      ui.sessionGuard = (ui.sessionGuard || 0) + 1;
+      ui.snapshotted = false;
+      ui.opened = new Set();
+      ui.preexpanded = new Set();
+      ensureUi();
+      CU.focus?.enable();
+      paintCycle();
+      const guard = ui.sessionGuard;
+      queueMicrotask(() => {
+        if (guard !== ui.sessionGuard || ui.phase === "off") return;
+        CU.expandCurrent();
+      });
+      return { phase: ui.phase };
+    }
+    if (ui.phase === "focus") {
+      ui.phase = "plain";
+      ui.managedFocus = false;
+      CU.focus?.disable();
+      ensureUi();
+      paintCycle();
+      return { phase: ui.phase };
+    }
+    ensureUi();
+    return shutdown({ restore: true });
+  };
+
+  CU.phase = function phase() {
+    return ui.phase;
+  };
 
   async function nudge(adapter) {
     const region = adapter.getRegion({ deep: true });
@@ -198,6 +420,7 @@
   CU.expandCurrent = async function expandCurrent() {
     const adapter = CU.currentAdapter();
     ensureUi();
+    if (ui.phase === "off") return { ok: false, reason: "off" };
     if (!adapter || !CU.shouldShowButton(adapter)) {
       setState("missing", "这个页面没有可展开的评论");
       return { ok: false, reason: "unsupported" };
@@ -206,7 +429,7 @@
     const my = ++ui.runId;
     ui.attempts = new WeakMap();
     setState("running", "展开中…");
-    CU.focus?.enable();
+    if (ui.phase === "focus") CU.focus?.enable();
 
     let region = await nudge(adapter);
     const waitUntil = Date.now() + 8000;
@@ -216,11 +439,13 @@
       region = adapter.getRegion({ deep: true });
     }
     if (!region) {
-      if (my === ui.runId) setState("missing", "没有找到评论区。若页面要求登录或验证，请先完成后再试。");
+      if (my === ui.runId && ui.phase !== "off") setState("missing", "没有找到评论区。若页面要求登录或验证，请先完成后再试。");
       return { ok: false, reason: "missing" };
     }
+    ensureSnapshot(region);
+    if (ui.phase !== "off") CU.pager.sync(adapter.pagers(region));
 
-    for (let i = 0; i < 8 && my === ui.runId && region && adapter.count(region) === 0; i += 1) {
+    for (let i = 0; i < 8 && my === ui.runId && ui.phase !== "off" && region && adapter.count(region) === 0; i += 1) {
       try {
         await adapter.pump(region);
       } catch {
@@ -237,7 +462,7 @@
     let grew = false;
     let round = 0;
     let natural = false;
-    const alive = () => my === ui.runId;
+    const alive = () => my === ui.runId && ui.phase !== "off";
 
     while (alive() && clicks < CU.LIMITS.maxClicks && Date.now() - started < CU.LIMITS.maxMs && round < CU.LIMITS.maxRounds) {
       round += 1;
@@ -253,7 +478,12 @@
       let clickedThisRound = 0;
       for (const el of targets.slice(0, 6)) {
         if (!alive() || clicks >= CU.LIMITS.maxClicks) break;
+        if (!allowClick(el)) {
+          ui.attempts.set(el, CU.LIMITS.perNode);
+          continue;
+        }
         try {
+          noteExpand(el);
           CU.clickControl(el);
           ui.attempts.set(el, (ui.attempts.get(el) || 0) + 1);
           clicks += 1;
@@ -274,7 +504,7 @@
         }
       }
       await CU.sleep(clickedThisRound || pumped ? CU.LIMITS.settleMs : 200);
-      CU.focus?.sync();
+      if (ui.phase === "focus") CU.focus?.sync();
       if (!alive()) break;
       if (!region.isConnected) region = adapter.getRegion({ deep: true });
       const after = region ? adapter.count(region) : before;
@@ -292,8 +522,9 @@
 
     if (!alive()) return { ok: false, reason: "aborted" };
     region = region?.isConnected ? region : adapter.getRegion({ deep: true });
-    const pagers = region ? adapter.pagers(region) : [];
-    CU.pager.sync(pagers);
+    const pagers = region && ui.phase !== "off" ? adapter.pagers(region) : [];
+    if (ui.phase === "off") CU.pager.clear();
+    else CU.pager.sync(pagers);
 
     const capped =
       !natural &&
@@ -351,9 +582,7 @@
       const nextKey = pageKey(location.href);
       if (nextKey === key) return;
       key = nextKey;
-      ui.runId += 1;
-      CU.pager.clear();
-      CU.focus?.disable();
+      shutdown({ restore: false });
       if (ui.host) setState("idle", "展开评论");
       refreshChrome();
     };
@@ -364,9 +593,8 @@
 
     if (globalThis.chrome?.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-        if (msg?.type !== "cu-expand") return;
-        CU.expandCurrent().then(sendResponse);
-        return true;
+        if (msg?.type !== "cu-cycle" && msg?.type !== "cu-expand") return;
+        sendResponse(CU.cycle());
       });
     }
   }
