@@ -11,6 +11,7 @@ async function expandTab(tabId) {
           "src/shared.js",
           "src/pager.js",
           "src/adapters.js",
+          "src/focus.js",
           "src/content.js",
         ],
       });

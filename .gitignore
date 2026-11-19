@@ -15,3 +15,6 @@ desktop.ini
 # Dependencies and logs
 node_modules/
 *.log
+
+# Owner reference screenshot; never ship it
+comment-focus-reference.png

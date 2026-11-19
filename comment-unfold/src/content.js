@@ -3,7 +3,7 @@
 
   const UI_CSS = `
     :host { all: initial; }
-    .cu-btn, .cu-hint {
+    .cu-btn, .cu-hint, .cu-off {
       font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
     }
     .cu-btn {
@@ -28,6 +28,23 @@
     .cu-btn[data-state="running"] { background: #8a5a12; }
     .cu-btn[data-state="missing"],
     .cu-btn[data-state="stopped"] { background: #5c6562; }
+    .cu-off {
+      position: fixed;
+      right: 20px;
+      bottom: 76px;
+      z-index: 2147483646;
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: #3d4348;
+      color: #fff;
+      font-size: 13px;
+      line-height: 1.35;
+      cursor: pointer;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+    }
+    .cu-off:hover { background: #2c3135; }
+    .cu-off[hidden] { display: none; }
     .cu-hint {
       position: fixed;
       z-index: 2147483645;
@@ -48,6 +65,7 @@
     .cu-hint[data-show="1"] { opacity: 1; }
     @media (max-width: 640px) {
       .cu-btn { right: 12px; bottom: 12px; font-size: 13px; padding: 8px 12px; }
+      .cu-off { right: 12px; bottom: 64px; }
     }
   `;
 
@@ -100,11 +118,18 @@
     button.textContent = "展开评论";
     button.title = "展开当前页评论";
     button.dataset.state = "idle";
+    const off = document.createElement("button");
+    off.type = "button";
+    off.className = "cu-off";
+    off.id = "cu-focus-off";
+    off.textContent = "取消变暗";
+    off.title = "去掉评论区的灰色遮罩，不刷新页面";
+    off.hidden = true;
     const hint = document.createElement("div");
     hint.className = "cu-hint";
     hint.dataset.show = "0";
     hint.setAttribute("aria-hidden", "true");
-    shadow.append(style, button, hint);
+    shadow.append(style, off, button, hint);
     (document.documentElement || document.body).appendChild(host);
     button.addEventListener("click", (event) => {
       event.preventDefault();
@@ -115,8 +140,14 @@
       }
       CU.expandCurrent();
     });
+    off.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      CU.focus?.disable();
+    });
     ui.host = host;
     ui.button = button;
+    CU.focus?.paintControls();
   }
 
   function removeUi() {
@@ -129,11 +160,13 @@
     const adapter = CU.currentAdapter();
     const show = CU.shouldShowButton(adapter);
     if (!show) {
+      CU.focus?.disable();
       if (ui.host?.dataset.state !== "running") removeUi();
       CU.pager.clear();
       return;
     }
     ensureUi();
+    if (CU.focus?.isOn()) CU.focus.sync();
     if (ui.host.dataset.state === "running") return;
     if (!ui.host.dataset.state || ui.host.dataset.state === "idle") setState("idle", "展开评论");
     const region = adapter.getRegion({ deep: true });
@@ -173,6 +206,7 @@
     const my = ++ui.runId;
     ui.attempts = new WeakMap();
     setState("running", "展开中…");
+    CU.focus?.enable();
 
     let region = await nudge(adapter);
     const waitUntil = Date.now() + 8000;
@@ -240,6 +274,7 @@
         }
       }
       await CU.sleep(clickedThisRound || pumped ? CU.LIMITS.settleMs : 200);
+      CU.focus?.sync();
       if (!alive()) break;
       if (!region.isConnected) region = adapter.getRegion({ deep: true });
       const after = region ? adapter.count(region) : before;
@@ -318,6 +353,7 @@
       key = nextKey;
       ui.runId += 1;
       CU.pager.clear();
+      CU.focus?.disable();
       if (ui.host) setState("idle", "展开评论");
       refreshChrome();
     };
